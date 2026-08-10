@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+ENV/
+
+# Training artifacts (checkpoints, outputs, logs)
+checkpoints/
+outputs/
+logs/
+*.pt
+*.pth
+*.err
+*.out
+
+# Dataset (DO NOT COMMIT TO GIT)
+Low_field_MRI_dataset_with_OSI_ONE Dataset/
+
+# Generated media/archives
+*.zip
+*.png
+*.jpg
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

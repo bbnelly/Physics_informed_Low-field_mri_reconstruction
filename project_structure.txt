@@ -1,0 +1,15 @@
+project/
+├── config.py                 # Configuration
+├── data_loader.py            # Dataset classes
+├── utils.py                  # Helper functions
+├── masks.py                  # Undersampling masks
+├── models.py                 # Model definitions
+├── train.py                  # Training loop
+├── visualize.py              # Visualization functions (NEW)
+├── evaluate.py               # Evaluation runner (NEW)
+├── main_cv.py                # Cross-validation main
+├── main_train.py             # Standard training main
+├── run_job.sh                # SLURM script
+├── requirements.txt          # Dependencies
+├── checkpoints/              # Saved models (created automatically)
+└── outputs/                  # PDFs, plots, JSON (created automatically)
