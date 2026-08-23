@@ -39,9 +39,13 @@ def generate_reconstruction_pdf(trained_models_dict, val_loader, device, all_res
         m.eval()
 
     def metrics(pred, tgt):
-        p = norm_img(pred)
-        t = norm_img(tgt)
-        psnr_val = float(np.clip(psnr(t, p, data_range=1.0), 0, 60))
+        # Normalize by the TARGET's range only; apply the same scale to the
+        # prediction so absolute intensity errors are preserved.
+        t_min = tgt.min()
+        rng = tgt.max() - t_min + 1e-8
+        p = (pred - t_min) / rng
+        t = (tgt - t_min) / rng
+        psnr_val = float(psnr(t, p, data_range=1.0))
         ssim_val = float(np.clip(ssim(t, p, data_range=1.0), 0, 1))
         return psnr_val, ssim_val
 

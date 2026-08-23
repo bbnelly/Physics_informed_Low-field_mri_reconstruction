@@ -70,7 +70,11 @@ def compute_psnr_ssim(pred, target):
     psnr_vals, ssim_vals = [], []
     for i in range(pred_mag.shape[0]):
         p, t = pred_mag[i].cpu().numpy(), target_mag[i].cpu().numpy()
-        p, t = (p - p.min()) / (p.max() - p.min() + 1e-8), (t - t.min()) / (t.max() - t.min() + 1e-8)
+        # Normalize by the TARGET's range only, applying the same scale to the
+        # prediction so absolute intensity errors are preserved.
+        t_min, t_max = t.min(), t.max()
+        rng = t_max - t_min + 1e-8
+        p, t = (p - t_min) / rng, (t - t_min) / rng
         psnr_vals.append(psnr(t, p, data_range=1))
         ssim_vals.append(ssim(t, p, data_range=1))
     return np.mean(psnr_vals), np.mean(ssim_vals)

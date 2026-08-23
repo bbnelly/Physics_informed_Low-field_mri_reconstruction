@@ -8,7 +8,6 @@ project/
 ├── visualize.py              # Visualization functions (NEW)
 ├── evaluate.py               # Evaluation runner (NEW)
 ├── main_cv.py                # Cross-validation main
-├── main_train.py             # Standard training main
 ├── run_job.sh                # SLURM script
 ├── requirements.txt          # Dependencies
 ├── checkpoints/              # Saved models (created automatically)

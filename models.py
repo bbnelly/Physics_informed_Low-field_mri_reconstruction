@@ -6,16 +6,20 @@ import torch.nn.functional as F
 class SimpleDualDomainCNN(nn.Module):
     def __init__(self, num_channels=64):
         super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(2, num_channels, 3, padding=1), nn.BatchNorm2d(num_channels), nn.ReLU(),
-            nn.Conv2d(num_channels, num_channels, 3, padding=1), nn.BatchNorm2d(num_channels), nn.ReLU(),
-            nn.Conv2d(num_channels, num_channels, 3, padding=1), nn.BatchNorm2d(num_channels), nn.ReLU(),
-        )
+        def make_encoder():
+            return nn.Sequential(
+                nn.Conv2d(2, num_channels, 3, padding=1), nn.BatchNorm2d(num_channels), nn.ReLU(),
+                nn.Conv2d(num_channels, num_channels, 3, padding=1), nn.BatchNorm2d(num_channels), nn.ReLU(),
+                nn.Conv2d(num_channels, num_channels, 3, padding=1), nn.BatchNorm2d(num_channels), nn.ReLU(),
+            )
+        # Separate encoders: k-space and image domains have very different statistics.
+        self.enc_k = make_encoder()
+        self.enc_i = make_encoder()
         self.output = nn.Conv2d(num_channels, 2, 3, padding=1)
 
     def forward(self, kspace_input, image_input):
-        f = self.encoder(kspace_input)
-        i = self.encoder(image_input)
+        f = self.enc_k(kspace_input)
+        i = self.enc_i(image_input)
         return self.output((f + i) / 2)
 
 class DUNDD(nn.Module):
@@ -31,14 +35,17 @@ class DUNDD(nn.Module):
         kspace = masked_kspace.clone()
         for _ in range(self.num_iterations):
             kc = torch.view_as_complex(kspace.permute(0, 2, 3, 1).contiguous())
-            image = torch.fft.ifft2(torch.fft.ifftshift(kc, dim=(-2, -1)), norm='ortho')
-            img_2ch = torch.view_as_real(image).permute(0, 3, 1, 2).contiguous()
+            kc = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(kc, dim=(-2, -1)), norm='ortho'), dim=(-2, -1))
+            img_2ch = torch.view_as_real(kc).permute(0, 3, 1, 2).contiguous()
             update_2ch = self.dual_cnn(kspace, img_2ch)
             uc = torch.view_as_complex(update_2ch.permute(0, 2, 3, 1).contiguous())
-            update_kspace = torch.fft.fftshift(torch.fft.fft2(uc, norm='ortho'), dim=(-2, -1))
+            update_kspace = torch.fft.fftshift(torch.fft.fft2(torch.fft.ifftshift(uc, dim=(-2, -1)), norm='ortho'), dim=(-2, -1))
             measured = torch.view_as_complex(masked_kspace.permute(0, 2, 3, 1).contiguous())
-            kc_new = measured * mask_bchw[:, 0] + update_kspace * (1 - mask_bchw[:, 0])
-            kc_new = kc_new + self.lambda_dc * (measured - kc_new) * mask_bchw[:, 0]
+            # Soft data consistency on sampled locations + hard replacement.
+            # (measured - kc_new) is zero where mask=1 after replacement, so the
+            # previous extra DC line was a no-op; apply soft DC before replacement.
+            kc_new = update_kspace + self.lambda_dc * (measured - update_kspace) * mask_bchw[:, 0]
+            kc_new = measured * mask_bchw[:, 0] + kc_new * (1 - mask_bchw[:, 0])
             kspace = torch.view_as_real(kc_new).permute(0, 3, 1, 2).contiguous()
         return kspace
 

@@ -108,146 +108,45 @@ def load_and_separate_dataset():
     
     return df, fully_sampled_df, undersampled_df
 # ============================================================
-# TRAINING DATASET
+# DATASET (used for both training folds and validation folds)
 # ============================================================
+class MRIDataset(Dataset):
+    """
+    Fully sampled files → synthetic undersampling mask applied on the fly.
 
-class TrainMRIDataset(Dataset):
-    """Fully sampled files → synthetic mask applied on the fly."""
-    def __init__(self, df, acceleration=DEFAULT_ACCELERATION):
+    random_masks=True  → a fresh random mask per slice per access (training:
+                         acts as augmentation, prevents mask memorization).
+    random_masks=False → one fixed mask per file, pre-generated from `seed`
+                         (validation: deterministic, comparable metrics).
+    """
+    def __init__(self, df, acceleration=DEFAULT_ACCELERATION,
+                 seed=DEFAULT_SEED, random_masks=False):
         self.df = df.reset_index(drop=True)
         self.acceleration = acceleration
-        self.cache = {}
-        self.slices_per_file = []
-        self.total_samples = 0
-        
-        print(f"Loading {len(self.df)} training files...")
-        
-        # ── ADD PROGRESS BAR ──
-        for _, row in tqdm(self.df.iterrows(), total=len(self.df), desc="Loading train files"):
-            vol = load_kspace_optimized(row['full_path'])
-            n_slices = vol.shape[0]
-            self.slices_per_file.append(n_slices)
-            self.total_samples += n_slices
-        
-        print(f"✅ Train: {len(self.df)} files, {self.total_samples} slices loaded")
-        
-    def __len__(self):
-        return self.total_samples
-
-    def __getitem__(self, idx):
-        cumulative = 0
-        for i, n_slices in enumerate(self.slices_per_file):
-            if idx < cumulative + n_slices:
-                file_idx, slice_idx = i, idx - cumulative
-                break
-            cumulative += n_slices
-        else:
-            raise IndexError(f"Index {idx} out of bounds")
-
-        if file_idx not in self.cache:
-            path = self.df.iloc[file_idx]['full_path']
-            vol, _ = normalize_kspace(load_kspace_optimized(path))
-            self.cache[file_idx] = vol
-
-        full_slice = self.cache[file_idx][slice_idx]
-
-        # Pad PE to 136
-        if full_slice.shape[0] != N_PE:
-            pad = N_PE - full_slice.shape[0]
-            pad_top, pad_bottom = pad // 2, pad - pad_top
-            full_slice = np.pad(full_slice, ((pad_top, pad_bottom), (0, 0)), mode='constant')
-
-        mask = create_r1r2_undersampling_mask(N_PE, N_RO, acceleration=self.acceleration).astype(np.float32)
-        undersampled = full_slice * mask
-
-        inp = torch.from_numpy(np.stack([undersampled.real, undersampled.imag])).float()
-        tgt = torch.from_numpy(np.stack([full_slice.real, full_slice.imag])).float()
-        return inp, tgt, torch.from_numpy(mask).float()
-
-
-# ============================================================
-# VALIDATION DATASET
-# ============================================================
-class ValMRIDataset(Dataset):
-    def __init__(self, df, acceleration=DEFAULT_ACCELERATION, seed=DEFAULT_SEED):
-        self.df = df.reset_index(drop=True)
-        self.acceleration = acceleration
-        self.cache = {}
+        self.random_masks = random_masks
         self.slices_per_file = []
         self.total_samples = 0
 
-        print(f"Loading {len(self.df)} validation files...")
-        for _, row in tqdm(self.df.iterrows(), total=len(self.df), desc="Loading val files"):
-            vol = load_kspace_optimized(row['full_path'])
+        split_name = "train" if random_masks else "val"
+        print(f"Loading {len(self.df)} {split_name} files...")
+        self.volumes = []
+        for _, row in tqdm(self.df.iterrows(), total=len(self.df), desc=f"Loading {split_name} files"):
+            vol, _ = normalize_kspace(load_kspace_optimized(row['full_path']))
+            self.volumes.append(vol)
             n_slices = vol.shape[0]
             self.slices_per_file.append(n_slices)
             self.total_samples += n_slices
 
-        # Pre-generate fixed masks
-        rng = np.random.default_rng(seed)
-        self.masks = []
-        for _ in range(len(self.df)):
-            s = rng.integers(0, 99999)
-            self.masks.append(create_r1r2_undersampling_mask(N_PE, N_RO, acceleration=acceleration, seed=int(s)).astype(np.float32))
+        # Pre-generate fixed masks only for deterministic (validation) mode
+        if not random_masks:
+            rng = np.random.default_rng(seed)
+            self.masks = []
+            for _ in range(len(self.df)):
+                s = rng.integers(0, 99999)
+                self.masks.append(create_r1r2_undersampling_mask(
+                    N_PE, N_RO, acceleration=acceleration, seed=int(s)).astype(np.float32))
 
-        print(f"✅ Val: {len(self.df)} files, {self.total_samples} slices loaded")
-    def __len__(self):
-        return self.total_samples
-
-    def __getitem__(self, idx):
-        cumulative = 0
-        for i, n_slices in enumerate(self.slices_per_file):
-            if idx < cumulative + n_slices:
-                file_idx, slice_idx = i, idx - cumulative
-                break
-            cumulative += n_slices
-        else:
-            raise IndexError(f"Index {idx} out of bounds")
-
-        if file_idx not in self.cache:
-            path = self.df.iloc[file_idx]['full_path']
-            vol, _ = normalize_kspace(load_kspace_optimized(path))
-            self.cache[file_idx] = vol
-
-        full_slice = self.cache[file_idx][slice_idx]
-        if full_slice.shape[0] != N_PE:
-            pad = N_PE - full_slice.shape[0]
-            pad_top, pad_bottom = pad // 2, pad - pad_top
-            full_slice = np.pad(full_slice, ((pad_top, pad_bottom), (0, 0)), mode='constant')
-
-        mask = self.masks[file_idx]
-        undersampled = full_slice * mask
-
-        inp = torch.from_numpy(np.stack([undersampled.real, undersampled.imag])).float()
-        tgt = torch.from_numpy(np.stack([full_slice.real, full_slice.imag])).float()
-        return inp, tgt, torch.from_numpy(mask).float()
-
-
-# ============================================================
-# TEST DATASET
-# ============================================================
-
-class TestMRIDataset(Dataset):
-    """Test with fixed mask (seed=123) — different from val."""
-    def __init__(self, df, acceleration=DEFAULT_ACCELERATION, seed=123):
-        self.df = df.reset_index(drop=True)
-        self.acceleration = acceleration
-        self.cache = {}
-        self.slices_per_file = []
-        self.total_samples = 0
-        for _, row in self.df.iterrows():
-            vol = load_kspace_optimized(row['full_path'])
-            n_slices = vol.shape[0]
-            self.slices_per_file.append(n_slices)
-            self.total_samples += n_slices
-
-        rng = np.random.default_rng(seed)
-        self.masks = []
-        for _ in range(len(self.df)):
-            s = rng.integers(0, 99999)
-            self.masks.append(create_r1r2_undersampling_mask(N_PE, N_RO, acceleration=acceleration, seed=int(s)).astype(np.float32))
-
-        print(f"TestMRIDataset: {len(self.df)} files, {self.total_samples} slices")
+        print(f"✅ {split_name.capitalize()}: {len(self.df)} files, {self.total_samples} slices loaded")
 
     def __len__(self):
         return self.total_samples
@@ -262,19 +161,19 @@ class TestMRIDataset(Dataset):
         else:
             raise IndexError(f"Index {idx} out of bounds")
 
-        if file_idx not in self.cache:
-            path = self.df.iloc[file_idx]['full_path']
-            vol, _ = normalize_kspace(load_kspace_optimized(path))
-            self.cache[file_idx] = vol
+        full_slice = self.volumes[file_idx][slice_idx]
 
-        full_slice = self.cache[file_idx][slice_idx]
-        if full_slice.shape[0] != N_PE:
-            pad = N_PE - full_slice.shape[0]
-            pad_top, pad_bottom = pad // 2, pad - pad_top
-            full_slice = np.pad(full_slice, ((pad_top, pad_bottom), (0, 0)), mode='constant')
-        mask = self.masks[file_idx]
+        if self.random_masks:
+            # Fresh random mask every access — no seed → non-deterministic.
+            mask = create_r1r2_undersampling_mask(N_PE, N_RO, acceleration=self.acceleration).astype(np.float32)
+        else:
+            mask = self.masks[file_idx]
         undersampled = full_slice * mask
 
         inp = torch.from_numpy(np.stack([undersampled.real, undersampled.imag])).float()
         tgt = torch.from_numpy(np.stack([full_slice.real, full_slice.imag])).float()
         return inp, tgt, torch.from_numpy(mask).float()
+
+
+# Backwards-compatible alias
+ValMRIDataset = MRIDataset

@@ -12,8 +12,8 @@ def create_circular_base_mask(n_pe=N_PE, n_ro=N_RO):
 
 def create_r1r2_undersampling_mask(n_pe=N_PE, n_ro=N_RO, center_fraction=0.125, acceleration=2, seed=None):
     """Variable-density random mask matching R1_R2 acquisition."""
-    if seed is not None:
-        np.random.seed(seed)
+    # Use a local generator so we never mutate global NumPy RNG state.
+    rng = np.random.default_rng(seed)
 
     mask = create_circular_base_mask(n_pe, n_ro)
     n_center_pe = max(1, int(round(n_pe * center_fraction)))
@@ -40,11 +40,11 @@ def create_r1r2_undersampling_mask(n_pe=N_PE, n_ro=N_RO, center_fraction=0.125, 
     flat_probs = prob_map.ravel()
     valid_indices = np.where(flat_probs > 0)[0]
     n_additional = min(n_additional, len(valid_indices))
-    chosen_flat = np.random.choice(len(flat_probs), size=n_additional, replace=False, p=flat_probs)
+    chosen_flat = rng.choice(len(flat_probs), size=n_additional, replace=False, p=flat_probs)
 
     final_mask = np.zeros((n_pe, n_ro), dtype=np.float32)
     final_mask[center_locked & (mask == 1)] = 1.0
-    final_mask.ravel()[chosen_flat] = 1.0
+    final_mask.flat[chosen_flat] = 1.0
     final_mask[mask == 0] = 0.0
     return final_mask
 
