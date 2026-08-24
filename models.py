@@ -78,7 +78,9 @@ class UNetBaseline(nn.Module):
         h, w = x.shape[-2], x.shape[-1]
         pad_h, pad_w = (8 - h % 8) % 8, (8 - w % 8) % 8
         x = F.pad(x, (0, pad_w, 0, pad_h))
-        e1, e2, e3 = self.enc1(x), self.enc2(self.pool(e1)), self.enc3(self.pool(e2))
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        e3 = self.enc3(self.pool(e2))
         b = self.bottleneck(self.pool(e3))
         d3 = self.dec3(torch.cat([self.up3(b), e3], dim=1))
         d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))

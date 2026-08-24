@@ -6,7 +6,7 @@ import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from config import DEFAULT_EPOCHS, DEFAULT_BATCH_SIZE, CV_SUBJECTS
+from config import DEFAULT_EPOCHS, DEFAULT_BATCH_SIZE, DEFAULT_ACCELERATION, CV_SUBJECTS
 from data_loader import load_and_separate_dataset
 from model_registry import model_factories
 from train import run_training
