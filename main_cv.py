@@ -6,7 +6,8 @@ import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from config import DEFAULT_EPOCHS, DEFAULT_BATCH_SIZE, DEFAULT_ACCELERATION, CV_SUBJECTS
+from config import (DEFAULT_EPOCHS, DEFAULT_BATCH_SIZE, DEFAULT_ACCELERATION,
+                    DEFAULT_LEARNING_RATE, CV_SUBJECTS)
 from data_loader import load_and_separate_dataset
 from model_registry import model_factories
 from train import run_training
@@ -38,7 +39,7 @@ def run_cross_validation(run, model_name='CascadeNet', num_epochs=DEFAULT_EPOCHS
     print(f"Device: {device}")
     print(f"Run: {run.run_id}")
     print(f"{'='*60}")
-    logger.info(f"LOSO CV starting — model={model_name}, epochs={num_epochs}, batch_size={batch_size}")
+    logger.info(f"LOSO CV starting — model={model_name}, epochs={num_epochs}, batch_size={batch_size}, lr={DEFAULT_LEARNING_RATE}")
 
     # ── Load data ────────────────────────────────────────────
     df, fully_sampled_df, _ = load_and_separate_dataset()
@@ -256,10 +257,12 @@ if __name__ == "__main__":
         except FileNotFoundError:
             print("No prior run found for this model — starting fresh")
             run = setup_run(args.model, base_dir=RUNS_BASE_DIR,
-                             extra_config={'num_epochs': args.epochs, 'batch_size': args.batch_size})
+                             extra_config={'num_epochs': args.epochs, 'batch_size': args.batch_size,
+                                           'learning_rate': DEFAULT_LEARNING_RATE})
     else:
         run = setup_run(args.model, base_dir=RUNS_BASE_DIR,
-                         extra_config={'num_epochs': args.epochs, 'batch_size': args.batch_size})
+                         extra_config={'num_epochs': args.epochs, 'batch_size': args.batch_size,
+                                       'learning_rate': DEFAULT_LEARNING_RATE})
 
     run_cross_validation(run, model_name=args.model, num_epochs=args.epochs,
                          batch_size=args.batch_size, acceleration=args.acceleration)

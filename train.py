@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
-from config import CHECKPOINT_DIR, DEFAULT_BATCH_SIZE, DEFAULT_EPOCHS
+from config import CHECKPOINT_DIR, DEFAULT_BATCH_SIZE, DEFAULT_EPOCHS, DEFAULT_LEARNING_RATE
 from data_loader import MRIDataset
 from utils import compute_psnr_ssim
 
@@ -73,7 +73,7 @@ def run_training(train_df, val_df, model, model_name='model', acceleration=2,
                             num_workers=2, persistent_workers=True)
 
     model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=DEFAULT_LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)
 
     best_ssim, best_epoch, start_epoch = 0.0, 0, 0

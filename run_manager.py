@@ -60,7 +60,9 @@ def _get_git_commit() -> str:
 def _make_run_id(model_name: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     job_id = _get_slurm_job_id()
-    return f"{model_name}_{timestamp}_job{job_id}"
+    tag = os.environ.get("RERUN_TAG", "").strip()
+    tag_part = f"_{tag}" if tag else ""
+    return f"{model_name}{tag_part}_{timestamp}_job{job_id}"
 
 
 @dataclass

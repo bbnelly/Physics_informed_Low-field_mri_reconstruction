@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cascade_cv
+#SBATCH --job-name=mri_rerun
 #SBATCH --output=logs/slurm/%x_%j.out
 #SBATCH --error=logs/slurm/%x_%j.err
 #SBATCH --time=12:00:00
@@ -27,12 +27,24 @@ module load StdEnv/2023
 module load python/3.13
 source ~/CascadeNet_Cross_validation/ENV/bin/activate
 
-# 3. Sanity-check torch/CUDA before training
+# 3. Run the requested model as a fresh tagged rerun.
+MODEL="${MODEL:-CascadeNet}"
+RERUN_TAG="${RERUN_TAG:-lr5e-4_rerun}"
+export RERUN_TAG
+
+# 4. Sanity-check torch/CUDA before training
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())" \
   || { echo "Torch/CUDA check failed"; exit 1; }
 
-# 4. Run the training script (run from repo root so relative paths work)
+# 5. Run the training script (run from repo root so relative paths work)
 cd ~/CascadeNet_Cross_validation
-python main_cv.py --model CascadeNet
+python main_cv.py --model "$MODEL" --epochs 40 --batch_size 8 --acceleration 2
+MAIN_CV_EXIT=$?
+
+if [ "$MAIN_CV_EXIT" -eq 0 ]; then
+    python evaluate_2.py --task all --model "$MODEL"
+else
+    echo "main_cv.py failed (exit $MAIN_CV_EXIT) - skipping evaluation"
+fi
 
 echo "Job finished successfully."

@@ -306,6 +306,7 @@ def run_stats(run, model_names, device):
 
 def run_visualize(run, model_name, device, acceleration=DEFAULT_ACCELERATION, top_n=4):
     cv_results = get_cv_results(run, model_name)
+    sweep = json.load(open(run.result_path(f'reliability_sweep_{model_name}.json')))
     ranked = sorted(cv_results.items(), key=lambda kv: kv[1]['best_ssim'], reverse=True)
     top_folds = ranked[:top_n]
     print(f"Top {top_n} folds by SSIM: {[(s, r['best_ssim']) for s, r in top_folds]}")
@@ -331,8 +332,10 @@ def run_visualize(run, model_name, device, acceleration=DEFAULT_ACCELERATION, to
         with torch.no_grad():
             inp_b, tgt_b, mask_b = inp.unsqueeze(0).to(device), tgt.unsqueeze(0).to(device), mask.unsqueeze(0).to(device)
             out_b = model(inp_b, mask_b)
-            p_list, s_list = per_slice_metrics(out_b, tgt_b)
             zp_list, zs_list = per_slice_metrics(inp_b, tgt_b)
+
+        fold_psnr = sweep[str(acceleration)]['model_psnr'][fold_idx - 1]
+        fold_ssim = sweep[str(acceleration)]['model_ssim'][fold_idx - 1]
 
         inp_img = norm_img(kspace_to_image(inp.numpy()))
         out_img = norm_img(kspace_to_image(out_b[0].cpu().numpy()))
@@ -345,8 +348,8 @@ def run_visualize(run, model_name, device, acceleration=DEFAULT_ACCELERATION, to
         axes[row_idx, 0].axis('off')
 
         axes[row_idx, 1].imshow(out_img, cmap='gray', vmin=0, vmax=1)
-        axes[row_idx, 1].set_title(f'{model_name} output\n(never trained on Subj {val_subject})\n'
-                                    f'PSNR={p_list[0]:.2f}dB SSIM={s_list[0]:.4f}', fontsize=9)
+        axes[row_idx, 1].set_title(f'{model_name} output\n'
+                                    f'Fold PSNR={fold_psnr:.2f}dB Fold SSIM={fold_ssim:.4f}', fontsize=9)
         axes[row_idx, 1].axis('off')
 
         axes[row_idx, 2].imshow(tgt_img, cmap='gray', vmin=0, vmax=1)
