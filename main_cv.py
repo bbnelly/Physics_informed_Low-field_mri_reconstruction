@@ -10,7 +10,7 @@ from config import (DEFAULT_EPOCHS, DEFAULT_BATCH_SIZE, DEFAULT_ACCELERATION,
                     DEFAULT_LEARNING_RATE, CV_SUBJECTS)
 from data_loader import load_and_separate_dataset
 from model_registry import model_factories
-from train import run_training
+from train import METRIC_DOMAIN, run_training
 from run_manager import setup_run, load_run, latest_run
 
 RUNS_BASE_DIR = os.path.expanduser("~/scratch/MRI_DATASET/Nelson_runs")
@@ -71,19 +71,25 @@ def run_cross_validation(run, model_name='CascadeNet', num_epochs=DEFAULT_EPOCHS
         # Fully-done check: history has num_epochs entries (robust even if the
         # final epoch never beat best SSIM and so never re-saved the checkpoint)
         already_done = False
+        existing_history = None
         if os.path.exists(hist_path):
             with open(hist_path) as f:
                 existing_history = json.load(f)
-            if len(existing_history.get('train_loss', [])) >= num_epochs:
+            if (existing_history.get('metric_domain') == METRIC_DOMAIN and
+                    len(existing_history.get('train_loss', [])) >= num_epochs):
                 already_done = True
 
         if already_done:
             print(f"⏭️  Fold {fold_idx+1} (val={val_subject}) already completed — skipping")
             logger.info(f"Fold {fold_idx+1} (val={val_subject}) already completed — skipping")
-            history = existing_history
-            best_ssim = max(history['val_ssim']) if history['val_ssim'] else 0
-            best_psnr = max(history['val_psnr']) if history['val_psnr'] else 0
-            best_epoch = history['val_ssim'].index(best_ssim) + 1 if history['val_ssim'] else 0
+            history = existing_history or {'metric_domain': METRIC_DOMAIN, 'train_loss': [], 'val_psnr': [], 'val_ssim': [], 'grad_norms': [], 'lr': []}
+            if history['val_ssim']:
+                best_idx = int(np.argmax(history['val_ssim']))
+                best_ssim = history['val_ssim'][best_idx]
+                best_psnr = history['val_psnr'][best_idx]
+                best_epoch = best_idx + 1
+            else:
+                best_ssim, best_psnr, best_epoch = 0, 0, 0
             cv_results[val_subject] = {
                 'fold': fold_idx + 1, 'val_subject': val_subject,
                 'best_ssim': best_ssim, 'best_psnr': best_psnr, 'best_epoch': best_epoch,
@@ -118,9 +124,13 @@ def run_cross_validation(run, model_name='CascadeNet', num_epochs=DEFAULT_EPOCHS
             checkpoint_dir=str(run.checkpoints),
         )
 
-        best_ssim = max(history['val_ssim']) if history['val_ssim'] else 0
-        best_psnr = max(history['val_psnr']) if history['val_psnr'] else 0
-        best_epoch = history['val_ssim'].index(best_ssim) + 1 if history['val_ssim'] else 0
+        if history['val_ssim']:
+            best_idx = int(np.argmax(history['val_ssim']))
+            best_ssim = history['val_ssim'][best_idx]
+            best_psnr = history['val_psnr'][best_idx]
+            best_epoch = best_idx + 1
+        else:
+            best_ssim, best_psnr, best_epoch = 0, 0, 0
 
         cv_results[val_subject] = {
             'fold': fold_idx + 1,

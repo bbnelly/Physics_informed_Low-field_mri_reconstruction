@@ -12,8 +12,7 @@ from data_loader import load_and_separate_dataset, ValMRIDataset
 from model_registry import model_factories
 from evaluate_2 import get_cv_results, load_fold_checkpoint, per_slice_metrics, kspace_to_image
 from run_manager import load_run
-from config import N_PE, N_RO
-from masks import create_r1r2_undersampling_mask
+from masks import create_ky_kz_undersampling_mask
 
 
 DEFAULT_MODELS = ("CascadeNet", "DUNDD", "E2EVarNet", "MoDL", "UNet")
@@ -130,28 +129,28 @@ def plot_reconstruction_slices(run_dirs, output_dir, device):
             sweep = load_json(run_dir / "results" / f"reliability_sweep_{model_name}.json")
             fold_val_df = fully_sampled_df[fully_sampled_df["subject"] == subject].reset_index(drop=True)
             val_set = ValMRIDataset(fold_val_df, acceleration=ACCELERATIONS[0])
-            slice_idx = val_set.slices_per_file[0] // 2
-            target = torch.from_numpy(np.stack([
-                val_set.volumes[0][slice_idx].real,
-                val_set.volumes[0][slice_idx].imag,
-            ])).float()
+            volume = val_set.volumes[0]
+            slice_idx = volume.shape[0] // 2
+            target = torch.from_numpy(np.stack([volume.real, volume.imag])).float()
         except (FileNotFoundError, KeyError, IndexError, json.JSONDecodeError):
             continue
-        target_img = kspace_to_image(target.numpy())
+        target_vol = kspace_to_image(target.numpy())
+        target_img = target_vol[slice_idx]
         figure, axes = plt.subplots(2, 3, figsize=(10, 7), squeeze=False)
         for col_idx, acceleration in enumerate(ACCELERATIONS):
             seed = 1000 + acceleration
-            mask = torch.from_numpy(create_r1r2_undersampling_mask(
-                N_PE, N_RO, acceleration=acceleration, seed=seed,
+            mask = torch.from_numpy(create_ky_kz_undersampling_mask(
+                volume.shape[0], volume.shape[1], volume.shape[2],
+                acceleration=acceleration, seed=seed,
             )).float()
-            undersampled = val_set.volumes[0][slice_idx] * mask.numpy()
+            undersampled = volume * mask.numpy()
             inp = torch.from_numpy(np.stack([undersampled.real, undersampled.imag])).float()
-            target_tensor = target
             with torch.no_grad():
                 output = model(inp.unsqueeze(0).to(device), mask.unsqueeze(0).to(device))
             fold_psnr = sweep[str(acceleration)]["model_psnr"][details["fold"] - 1]
             fold_ssim = sweep[str(acceleration)]["model_ssim"][details["fold"] - 1]
-            output_img = target_normalized(kspace_to_image(output[0].cpu().numpy()), target_img)
+            output_vol = kspace_to_image(output[0].cpu().numpy())
+            output_img = target_normalized(output_vol[slice_idx], target_img)
             row_idx, panel_idx = divmod(col_idx, 3)
             ax = axes[row_idx, panel_idx]
             ax.imshow(output_img, cmap="gray", vmin=0, vmax=1, interpolation="nearest")

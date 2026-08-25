@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
-from config import N_PE, N_RO
+
 
 def load_kspace_optimized(filepath, verbose=False):
     """Load k-space and pad PE dimension to 136."""
@@ -63,18 +63,52 @@ def normalize_kspace(kspace):
     scale = np.abs(kspace).max() + 1e-9
     return (kspace / scale).astype(np.complex64), scale
 
+def kspace_to_image_magnitude(kspace_2ch):
+    """Convert 2-channel k-space tensors to image-domain magnitude.
+
+    Preferred Option-A shape is (B, 2, kz, ky, kx), reconstructed with 3D IFFT.
+    A legacy (B, 2, ky, kx) 2D fallback is kept for older visualization helpers.
+    """
+    kc = kspace_2ch[:, 0] + 1j * kspace_2ch[:, 1]
+    if kc.ndim == 4:
+        img = torch.fft.fftshift(
+            torch.fft.ifftn(torch.fft.ifftshift(kc, dim=(-3, -2, -1)),
+                            dim=(-3, -2, -1), norm='ortho'),
+            dim=(-3, -2, -1),
+        )
+    elif kc.ndim == 3:
+        img = torch.fft.fftshift(
+            torch.fft.ifft2(torch.fft.ifftshift(kc, dim=(-2, -1)), norm='ortho'),
+            dim=(-2, -1),
+        )
+    else:
+        raise ValueError(f"Expected 4D/5D 2-channel k-space tensor, got shape {tuple(kspace_2ch.shape)}")
+    return img.abs()
+
+
 def compute_psnr_ssim(pred, target):
-    """Compute PSNR and SSIM from 2-channel tensors."""
-    pred_mag = torch.sqrt(pred[:, 0]**2 + pred[:, 1]**2 + 1e-8)
-    target_mag = torch.sqrt(target[:, 0]**2 + target[:, 1]**2 + 1e-8)
+    """Compute image-domain PSNR/SSIM from 2-channel k-space tensors.
+
+    For 3D volumes, metrics are computed slice-wise along the reconstructed z
+    direction and then averaged. This keeps reported values comparable to common
+    MRI papers while preserving physically correct 3D reconstruction first.
+    """
+    pred_mag = kspace_to_image_magnitude(pred)
+    target_mag = kspace_to_image_magnitude(target)
     psnr_vals, ssim_vals = [], []
     for i in range(pred_mag.shape[0]):
-        p, t = pred_mag[i].cpu().numpy(), target_mag[i].cpu().numpy()
-        # Normalize by the TARGET's range only, applying the same scale to the
-        # prediction so absolute intensity errors are preserved.
-        t_min, t_max = t.min(), t.max()
-        rng = t_max - t_min + 1e-8
-        p, t = (p - t_min) / rng, (t - t_min) / rng
-        psnr_vals.append(psnr(t, p, data_range=1))
-        ssim_vals.append(ssim(t, p, data_range=1))
+        p_vol = pred_mag[i].detach().cpu().numpy()
+        t_vol = target_mag[i].detach().cpu().numpy()
+        if p_vol.ndim == 2:
+            p_vol = p_vol[None, ...]
+            t_vol = t_vol[None, ...]
+        for z in range(p_vol.shape[0]):
+            p, t = p_vol[z], t_vol[z]
+            # Normalize by the TARGET's range only, applying the same scale to the
+            # prediction so absolute intensity errors are preserved.
+            t_min, t_max = t.min(), t.max()
+            rng = t_max - t_min + 1e-8
+            p, t = (p - t_min) / rng, (t - t_min) / rng
+            psnr_vals.append(psnr(t, p, data_range=1))
+            ssim_vals.append(ssim(t, p, data_range=1))
     return np.mean(psnr_vals), np.mean(ssim_vals)

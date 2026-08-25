@@ -127,7 +127,7 @@ def main():
         "all",
     ], default="all")
     parser.add_argument("--epochs", type=int, default=60)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--acceleration", type=int, default=2)
     parser.add_argument("--extended_epochs", type=int, default=300)
     parser.add_argument("--top_n", type=int, default=2)
@@ -175,9 +175,9 @@ def main():
             run_id = item["run_id"]
             best_r = best_acceleration_for_model(model, run_id)
             tuning_configs = [
-                {"batch_size": 8, "epochs": args.epochs},
-                {"batch_size": 16, "epochs": args.epochs},
-                {"batch_size": 8, "epochs": min(args.epochs + 10, 90)},
+                {"batch_size": 1, "epochs": args.epochs},
+                {"batch_size": 2, "epochs": args.epochs},
+                {"batch_size": 1, "epochs": min(args.epochs + 10, 90)}, 
             ]
             for cfg in tuning_configs:
                 run_tune(model, epochs=cfg["epochs"], batch_size=cfg["batch_size"], acceleration=best_r, tuning_config=cfg)

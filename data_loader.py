@@ -1,12 +1,11 @@
 # data_loader.py
 import os
-import h5py
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-from config import N_PE, N_RO, DEFAULT_ACCELERATION, DEFAULT_SEED, BASE_PATH
-from masks import create_r1r2_undersampling_mask
+from config import DEFAULT_ACCELERATION, DEFAULT_SEED, BASE_PATH
+from masks import create_ky_kz_undersampling_mask
 from utils import normalize_kspace, load_kspace_optimized
 from tqdm import tqdm
 
@@ -112,20 +111,25 @@ def load_and_separate_dataset():
 # ============================================================
 class MRIDataset(Dataset):
     """
-    Fully sampled files → synthetic undersampling mask applied on the fly.
+    Fully sampled 3D k-space files → synthetic ky-kz undersampling mask applied
+    on the fly.
 
-    random_masks=True  → a fresh random mask per slice per access (training:
+    Each dataset item is now one full volume shaped (kz, ky, kx), not an
+    individual kz plane. This enables physically correct 3D FFT reconstruction.
+
+    random_masks=True  → a fresh random mask per volume per access (training:
                          acts as augmentation, prevents mask memorization).
     random_masks=False → one fixed mask per file, pre-generated from `seed`
                          (validation: deterministic, comparable metrics).
     """
     def __init__(self, df, acceleration=DEFAULT_ACCELERATION,
                  seed=DEFAULT_SEED, random_masks=False):
+        super().__init__()
         self.df = df.reset_index(drop=True)
         self.acceleration = acceleration
         self.random_masks = random_masks
-        self.slices_per_file = []
-        self.total_samples = 0
+        self.slices_per_file = []  # retained for backwards-compatible visualization code
+        self.total_samples = len(self.df)
 
         split_name = "train" if random_masks else "val"
         print(f"Loading {len(self.df)} {split_name} files...")
@@ -133,45 +137,43 @@ class MRIDataset(Dataset):
         for _, row in tqdm(self.df.iterrows(), total=len(self.df), desc=f"Loading {split_name} files"):
             vol, _ = normalize_kspace(load_kspace_optimized(row['full_path']))
             self.volumes.append(vol)
-            n_slices = vol.shape[0]
-            self.slices_per_file.append(n_slices)
-            self.total_samples += n_slices
+            n_kz = vol.shape[0]
+            self.slices_per_file.append(n_kz)
 
         # Pre-generate fixed masks only for deterministic (validation) mode
         if not random_masks:
             rng = np.random.default_rng(seed)
             self.masks = []
-            for _ in range(len(self.df)):
+            for vol in self.volumes:
                 s = rng.integers(0, 99999)
-                self.masks.append(create_r1r2_undersampling_mask(
-                    N_PE, N_RO, acceleration=acceleration, seed=int(s)).astype(np.float32))
+                self.masks.append(create_ky_kz_undersampling_mask(
+                    vol.shape[0], vol.shape[1], vol.shape[2],
+                    acceleration=acceleration, seed=int(s)).astype(np.float32))
 
-        print(f"✅ {split_name.capitalize()}: {len(self.df)} files, {self.total_samples} slices loaded")
+        print(f"✅ {split_name.capitalize()}: {len(self.df)} 3D volumes loaded")
 
     def __len__(self):
         return self.total_samples
 
     def __getitem__(self, idx):
-        cumulative = 0
-        for i, n_slices in enumerate(self.slices_per_file):
-            if idx < cumulative + n_slices:
-                file_idx, slice_idx = i, idx - cumulative
-                break
-            cumulative += n_slices
-        else:
+        if idx < 0 or idx >= len(self.df):
             raise IndexError(f"Index {idx} out of bounds")
 
-        full_slice = self.volumes[file_idx][slice_idx]
+        file_idx = idx
+        full_volume = self.volumes[file_idx]
 
         if self.random_masks:
-            # Fresh random mask every access — no seed → non-deterministic.
-            mask = create_r1r2_undersampling_mask(N_PE, N_RO, acceleration=self.acceleration).astype(np.float32)
+            # Fresh random ky-kz mask every access — no seed → non-deterministic.
+            mask = create_ky_kz_undersampling_mask(
+                full_volume.shape[0], full_volume.shape[1], full_volume.shape[2],
+                acceleration=self.acceleration,
+            ).astype(np.float32)
         else:
             mask = self.masks[file_idx]
-        undersampled = full_slice * mask
+        undersampled = full_volume * mask
 
         inp = torch.from_numpy(np.stack([undersampled.real, undersampled.imag])).float()
-        tgt = torch.from_numpy(np.stack([full_slice.real, full_slice.imag])).float()
+        tgt = torch.from_numpy(np.stack([full_volume.real, full_volume.imag])).float()
         return inp, tgt, torch.from_numpy(mask).float()
 
 

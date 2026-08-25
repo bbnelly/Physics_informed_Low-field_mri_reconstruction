@@ -29,6 +29,7 @@ from config import DEFAULT_ACCELERATION
 from data_loader import load_and_separate_dataset, ValMRIDataset
 from model_registry import model_factories
 from run_manager import load_run, latest_run
+from train import METRIC_DOMAIN
 
 RUNS_BASE_DIR = os.path.expanduser("~/scratch/MRI_DATASET/Nelson_runs")
 
@@ -39,27 +40,56 @@ R_VALUES = [2, 4, 6, 8, 10, 12]
 # SHARED HELPERS
 # ============================================================
 
-def _mag(t):
-    return torch.sqrt(t[:, 0] ** 2 + t[:, 1] ** 2 + 1e-8)
+def _image_mag_from_kspace(t):
+    """Convert batched 2-channel k-space tensors to image-domain magnitude."""
+    kc = t[:, 0] + 1j * t[:, 1]
+    if kc.ndim == 4:
+        img = torch.fft.fftshift(
+            torch.fft.ifftn(torch.fft.ifftshift(kc, dim=(-3, -2, -1)),
+                            dim=(-3, -2, -1), norm='ortho'),
+            dim=(-3, -2, -1),
+        )
+    elif kc.ndim == 3:
+        img = torch.fft.fftshift(
+            torch.fft.ifft2(torch.fft.ifftshift(kc, dim=(-2, -1)), norm='ortho'),
+            dim=(-2, -1),
+        )
+    else:
+        raise ValueError(f"Expected 4D/5D 2-channel k-space tensor, got shape {tuple(t.shape)}")
+    return img.abs()
 
 
 def per_slice_metrics(pred, target):
-    pred_mag, target_mag = _mag(pred), _mag(target)
+    pred_mag = _image_mag_from_kspace(pred)
+    target_mag = _image_mag_from_kspace(target)
     psnr_vals, ssim_vals = [], []
     for i in range(pred_mag.shape[0]):
-        p, t = pred_mag[i].detach().cpu().numpy(), target_mag[i].detach().cpu().numpy()
-        # Normalize by the TARGET's range only; apply the same scale to the
-        # prediction so absolute intensity errors are preserved.
-        t_min, rng_ = t.min(), t.max() - t.min() + 1e-8
-        p, t = (p - t_min) / rng_, (t - t_min) / rng_
-        psnr_vals.append(float(psnr(t, p, data_range=1)))
-        ssim_vals.append(float(ssim(t, p, data_range=1)))
+        p_vol = pred_mag[i].detach().cpu().numpy()
+        t_vol = target_mag[i].detach().cpu().numpy()
+        if p_vol.ndim == 2:
+            p_vol = p_vol[None, ...]
+            t_vol = t_vol[None, ...]
+        for z in range(p_vol.shape[0]):
+            p, t = p_vol[z], t_vol[z]
+            # Normalize by the TARGET's range only; apply the same scale to the
+            # prediction so absolute intensity errors are preserved.
+            t_min, rng_ = t.min(), t.max() - t.min() + 1e-8
+            p, t = (p - t_min) / rng_, (t - t_min) / rng_
+            psnr_vals.append(float(psnr(t, p, data_range=1)))
+            ssim_vals.append(float(ssim(t, p, data_range=1)))
     return psnr_vals, ssim_vals
 
 
 def kspace_to_image(kspace_2ch):
     kc = kspace_2ch[0] + 1j * kspace_2ch[1]
-    img = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(kc)))
+    if kc.ndim == 3:
+        img = np.fft.fftshift(
+            np.fft.ifftn(np.fft.ifftshift(kc, axes=(-3, -2, -1)),
+                         axes=(-3, -2, -1), norm='ortho'),
+            axes=(-3, -2, -1),
+        )
+    else:
+        img = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(kc), norm='ortho'))
     return np.abs(img)
 
 
@@ -72,8 +102,11 @@ def load_fold_checkpoint(run, model_name, fold_idx, val_subject, device):
     ckpt_path = run.checkpoint_path(f'best_{model_name_fold}.pt')
     if not os.path.exists(ckpt_path):
         return None, None
-    model = model_factories[model_name]()
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    if ckpt.get('metric_domain') != METRIC_DOMAIN:
+        print(f"  ⚠️  Skipping incompatible checkpoint {ckpt_path}; expected {METRIC_DOMAIN}")
+        return None, None
+    model = model_factories[model_name]()
     model.load_state_dict(ckpt['model_state'])
     model = model.to(device).eval()
     return model, ckpt
@@ -108,7 +141,7 @@ def run_sweep(run, model_name, device):
 
         for R in R_VALUES:
             val_set = ValMRIDataset(fold_val_df, acceleration=R)
-            val_loader = DataLoader(val_set, batch_size=4, shuffle=False, num_workers=0)
+            val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=0)
 
             fold_model_ssim, fold_model_psnr, fold_zf_ssim, fold_zf_psnr = [], [], [], []
             with torch.no_grad():
@@ -173,7 +206,7 @@ def run_boxplot(run, model_name, device, acceleration=DEFAULT_ACCELERATION):
 
         fold_val_df = fully_sampled_df[fully_sampled_df['subject'] == val_subject].reset_index(drop=True)
         val_set = ValMRIDataset(fold_val_df, acceleration=acceleration)
-        val_loader = DataLoader(val_set, batch_size=4, shuffle=False, num_workers=0)
+        val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=0)
 
         ssims, psnrs, zf_ssims, zf_psnrs = [], [], [], []
         with torch.no_grad():
@@ -325,26 +358,30 @@ def run_visualize(run, model_name, device, acceleration=DEFAULT_ACCELERATION, to
         fold_val_df = fully_sampled_df[fully_sampled_df['subject'] == val_subject].reset_index(drop=True)
         val_set = ValMRIDataset(fold_val_df, acceleration=acceleration)
 
-        n_slices = val_set.slices_per_file[0]
-        global_idx = n_slices // 2
-        inp, tgt, mask = val_set[global_idx]
+        inp, tgt, mask = val_set[0]
 
         with torch.no_grad():
             inp_b, tgt_b, mask_b = inp.unsqueeze(0).to(device), tgt.unsqueeze(0).to(device), mask.unsqueeze(0).to(device)
             out_b = model(inp_b, mask_b)
             zp_list, zs_list = per_slice_metrics(inp_b, tgt_b)
+            zf_psnr = float(np.mean(zp_list))
+            zf_ssim = float(np.mean(zs_list))
 
         fold_psnr = sweep[str(acceleration)]['model_psnr'][fold_idx - 1]
         fold_ssim = sweep[str(acceleration)]['model_ssim'][fold_idx - 1]
 
-        inp_img = norm_img(kspace_to_image(inp.numpy()))
-        out_img = norm_img(kspace_to_image(out_b[0].cpu().numpy()))
-        tgt_img = norm_img(kspace_to_image(tgt.numpy()))
+        inp_vol = norm_img(kspace_to_image(inp.numpy()))
+        out_vol = norm_img(kspace_to_image(out_b[0].cpu().numpy()))
+        tgt_vol = norm_img(kspace_to_image(tgt.numpy()))
+        z_idx = inp_vol.shape[0] // 2
+        inp_img = inp_vol[z_idx]
+        out_img = out_vol[z_idx]
+        tgt_img = tgt_vol[z_idx]
         err_img = np.abs(out_img - tgt_img)
 
         axes[row_idx, 0].imshow(inp_img, cmap='gray', vmin=0, vmax=1)
         axes[row_idx, 0].set_title(f'Zero-filled\nSubj {val_subject} (fold {fold_idx})\n'
-                                    f'PSNR={zp_list[0]:.2f}dB SSIM={zs_list[0]:.4f}', fontsize=9)
+                                    f'Mean PSNR={zf_psnr:.2f}dB SSIM={zf_ssim:.4f}', fontsize=9)
         axes[row_idx, 0].axis('off')
 
         axes[row_idx, 1].imshow(out_img, cmap='gray', vmin=0, vmax=1)

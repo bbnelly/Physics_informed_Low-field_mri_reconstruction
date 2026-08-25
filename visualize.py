@@ -11,9 +11,16 @@ from tqdm import tqdm
 from config import OUTPUT_DIR
 
 def kspace_to_image(kspace_2ch):
-    """Convert 2-channel k-space to magnitude image."""
+    """Convert 2-channel k-space to magnitude image/volume."""
     kc = kspace_2ch[0] + 1j * kspace_2ch[1]
-    img = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(kc)))
+    if kc.ndim == 3:
+        img = np.fft.fftshift(
+            np.fft.ifftn(np.fft.ifftshift(kc, axes=(-3, -2, -1)),
+                         axes=(-3, -2, -1), norm='ortho'),
+            axes=(-3, -2, -1),
+        )
+    else:
+        img = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(kc), norm='ortho'))
     return np.abs(img)
 
 
@@ -60,13 +67,17 @@ def generate_reconstruction_pdf(trained_models_dict, val_loader, device, all_res
                 if len(samples) >= n_samples:
                     break
 
-                inp_img = kspace_to_image(inp[i].cpu().numpy())
-                tgt_img = kspace_to_image(tgt[i].cpu().numpy())
+                inp_vol = kspace_to_image(inp[i].cpu().numpy())
+                tgt_vol = kspace_to_image(tgt[i].cpu().numpy())
+                z_idx = inp_vol.shape[0] // 2 if inp_vol.ndim == 3 else 0
+                inp_img = inp_vol[z_idx] if inp_vol.ndim == 3 else inp_vol
+                tgt_img = tgt_vol[z_idx] if tgt_vol.ndim == 3 else tgt_vol
                 psnr_zf, ssim_zf = metrics(inp_img, tgt_img)
 
                 model_outputs = {}
                 for name in model_names:
-                    out_img = kspace_to_image(outputs[name][i].cpu().numpy())
+                    out_vol = kspace_to_image(outputs[name][i].cpu().numpy())
+                    out_img = out_vol[z_idx] if out_vol.ndim == 3 else out_vol
                     p, s = metrics(out_img, tgt_img)
                     model_outputs[name] = {'img': out_img, 'psnr': p, 'ssim': s}
 
