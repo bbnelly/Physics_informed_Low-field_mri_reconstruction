@@ -74,10 +74,13 @@ def run_training(train_df, val_df, model, model_name='model', acceleration=2,
     # validation folds use fixed per-file masks (deterministic metrics).
     train_set = MRIDataset(train_df, acceleration=acceleration, random_masks=True)
     val_set = MRIDataset(val_df, acceleration=acceleration, random_masks=False)
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
-                              num_workers=4, persistent_workers=True)
-    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
-                            num_workers=2, persistent_workers=True)
+    # Volumes have different kz depths, so they cannot be stacked into a batch.
+    # Keep the public batch_size argument for CLI compatibility, but process
+    # one complete volume at a time.
+    if batch_size != 1:
+        print(f"  Using batch_size=1 for variable-depth 3D volumes (requested {batch_size})")
+    train_loader = DataLoader(train_set, batch_size=1, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=0)
 
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=DEFAULT_LEARNING_RATE)

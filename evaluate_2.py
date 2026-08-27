@@ -226,6 +226,9 @@ def run_boxplot(run, model_name, device, acceleration=DEFAULT_ACCELERATION):
 
     out = {'model_ssim': subject_ssim, 'model_psnr': subject_psnr,
            'zf_ssim': zf_subject_ssim, 'zf_psnr': zf_subject_psnr}
+    if not subject_ssim:
+        print(f"No compatible checkpoints found for {model_name}; skipping boxplots")
+        return
     out_path = run.result_path(f'per_subject_distributions_{model_name}.json')
     with open(out_path, 'w') as f:
         json.dump(out, f, indent=2)

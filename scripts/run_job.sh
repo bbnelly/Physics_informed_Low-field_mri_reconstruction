@@ -37,14 +37,23 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
   || { echo "Torch/CUDA check failed"; exit 1; }
 
 # 5. Run the training script (run from repo root so relative paths work)
-cd ~/CascadeNet_Cross_validation
+cd ~/3D-experiments-for-5-models
 python main_cv.py --model "$MODEL" --epochs 40 --batch_size 8 --acceleration 2
 MAIN_CV_EXIT=$?
 
 if [ "$MAIN_CV_EXIT" -eq 0 ]; then
-    python evaluate_2.py --task all --model "$MODEL"
+    RUN_ID=$(find ~/scratch/MRI_DATASET/Nelson_runs -mindepth 1 -maxdepth 1 \
+        -type d -name "${MODEL}_*" -printf '%T@ %f\n' | sort -n | tail -1 | cut -d' ' -f2-)
+    echo "Evaluating run: $RUN_ID"
+    python evaluate_2.py --task all --model "$MODEL" --run_id "$RUN_ID"
+    EVAL_EXIT=$?
+    if [ "$EVAL_EXIT" -ne 0 ]; then
+        echo "Evaluation failed (exit $EVAL_EXIT)"
+        exit "$EVAL_EXIT"
+    fi
 else
     echo "main_cv.py failed (exit $MAIN_CV_EXIT) - skipping evaluation"
+    exit "$MAIN_CV_EXIT"
 fi
 
 echo "Job finished successfully."

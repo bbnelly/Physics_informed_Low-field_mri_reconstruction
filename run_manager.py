@@ -225,4 +225,5 @@ def latest_run(base_dir: str, model_name: str) -> str:
     runs = list_runs(base_dir, model_name=model_name)
     if not runs:
         raise FileNotFoundError(f"No runs found for model '{model_name}' in {base_dir}")
-    return runs[-1]
+    base = Path(base_dir)
+    return max(runs, key=lambda run_id: (base / run_id).stat().st_mtime)
